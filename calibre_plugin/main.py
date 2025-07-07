@@ -7,7 +7,7 @@ __license__   = "GPL v3"
 
 import sys
 import datetime
-from PyQt6.QtCore import Qt, QSortFilterProxyModel, QStringListModel
+from PyQt6.QtCore import Qt, QSortFilterProxyModel, QStringListModel, QEvent
 from PyQt6.QtWidgets import QDialog, QGridLayout, QLineEdit, QComboBox, QPushButton, QCheckBox, QMessageBox, QLabel, QAbstractItemView, QTableView, QHeaderView
 
 from calibre_plugins.opds_client.model import OpdsBooksModel
@@ -148,13 +148,32 @@ class OpdsDialog(QDialog):
 
         self.resize(self.sizeHint())
 
+        self.catalogHistory = []               # ← navigaztion stack
+        # --------------------------------------------------------------
+        # 1. Loading ROOT catalog as list od subcatalogs
+        catalogs = self.model.downloadOpdsRootCatalog(
+            self.gui, self.opdsUrlEditor.currentText(), False
+        )
+        self.currentOpdsCatalogs = catalogs[1]            # dict title→url
+        self.model.loadSubcatalogs(self.currentOpdsCatalogs)
+
+        # 2. Hide outdated GUI elements
+        self.opdsCatalogSelectorLabel.hide()
+        self.opdsCatalogSelector.hide()
+        self.download_opds_button.hide()
+
+        # --------------------------------------------------------------
+        # 3. Navigation signals «Enter / DoubleClick / Backspace»
+        self.library_view.doubleClicked.connect(self._activateCurrentItem)
+        self.library_view.installEventFilter(self)
+        
     def opdsUrlEditorActivated(self, text):
         prefs['opds_url'] = config.saveOpdsUrlCombobox(self.opdsUrlEditor)
-        catalogsTuple = self.model.downloadOpdsRootCatalog(self.gui, self.opdsUrlEditor.currentText(), True)
-        firstCatalogTitle = catalogsTuple[0]
-        self.currentOpdsCatalogs = catalogsTuple[1] # A dictionary of title->feedURL
-        self.opdsCatalogSelectorModel.setStringList(self.currentOpdsCatalogs.keys())
-        self.opdsCatalogSelector.setCurrentText(firstCatalogTitle)
+        catalogs = self.model.downloadOpdsRootCatalog(
+            self.gui, self.opdsUrlEditor.currentText(), True
+        )
+        self.currentOpdsCatalogs = catalogs[1]
+        self.model.loadSubcatalogs(self.currentOpdsCatalogs)
 
     def setHideNewspapers(self, checked):
         prefs['hideNewspapers'] = checked
@@ -251,3 +270,57 @@ class OpdsDialog(QDialog):
         rowHeight = self.library_view.horizontalHeader().height()
         for rowNumber in range (0, self.library_view.model().rowCount()):
             self.library_view.setRowHeight(rowNumber, rowHeight)
+
+
+    # -----------------------------------------------------------------
+    #  process keypress
+    def eventFilter(self, obj, ev):
+        if obj is self.library_view and ev.type() == QEvent.KeyPress:
+            if ev.key() in (Qt.Key_Return, Qt.Key_Enter):
+                self._activateCurrentItem()
+                return True
+            if ev.key() == Qt.Key_Backspace:
+                self._navigateBack()
+                return True
+        return super().eventFilter(obj, ev)
+
+    # -----------------------------------------------------------------
+    def _activateCurrentItem(self, index=None):
+        """Enter / DoubleClick → открыть каталог или скачать книгу"""
+        if index is None:
+            index = self.library_view.currentIndex()
+            if not index.isValid():
+                return
+
+        meta = index.data(Qt.UserRole)
+
+        # --- SUBCATALOG? ----------------------------------------------
+        if hasattr(meta, 'catalogUrl'):                # ← fixed
+            # save current state for Backspace
+            self.catalogHistory.append(
+                (list(self.model.books), self.model.serverHeader)
+            )
+            self._openCatalog(meta.catalogUrl)         # ← fixed
+        else:
+            self.downloadBook(meta)
+
+    # -----------------------------------------------------------------
+    def _openCatalog(self, url: str):
+        self.model.downloadOpdsCatalog(self.gui, url)
+        if self.model.isCalibreOpdsServer():
+            self.model.downloadMetadataUsingCalibreRestApi(
+                self.opdsUrlEditor.currentText()
+            )
+        self.resizeAllLibraryViewLinesToHeaderHeight()
+
+    # -----------------------------------------------------------------
+    def _navigateBack(self):
+        if not self.catalogHistory:
+            return                                  # already at root
+        prev_books, prev_header = self.catalogHistory.pop()
+        self.model.beginResetModel()
+        self.model.books = prev_books
+        self.model.serverHeader = prev_header
+        self.model.filterBooks()
+        self.model.endResetModel()
+        self.resizeAllLibraryViewLinesToHeaderHeight()

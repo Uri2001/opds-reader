@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 import json
 import re
+from copy import deepcopy
 
 
 class OpdsBooksModel(QAbstractTableModel):
@@ -163,24 +164,43 @@ class OpdsBooksModel(QAbstractTableModel):
         for summaryline in summarylines:
             if summaryline.startswith(u'TAGS: '):
                 tagsline = summaryline.replace(u'TAGS: ', u'')
-                tagsline = tagsline.replace(u'<br />',u'')
+                tagsline = tagsline.replace(u'<br />', u'')
                 tagsline = tagsline.replace(u', ', u',')
                 tags = tagsline.split(u',')
         metadata.tags = tags
         bookDownloadUrls = []
+        catalogUrl = None                     # ← this is not book but catalog
         links = opdsBookStructure.get('links', [])
         for link in links:
             url = link.get('href', '')
-            bookType = link.get('type', '')
+            bookType = link.get('type', '') or ''
             # Skip covers and thumbnails
-            if not bookType.startswith('image/'):
-                if bookType == 'application/epub+zip':
-                    # EPUB books are preferred and always put at the head of the list if found
-                    bookDownloadUrls.insert(0, url)
-                else:
-                    # Formats other than EPUB (eg. AZW), are appended as they are found
-                    bookDownloadUrls.append(url)
-        metadata.links = bookDownloadUrls
+            if bookType.startswith('image/'):
+                continue
+
+            # Nested catalog (application/atom+xml)
+            if bookType.startswith('application/atom+xml'):
+                if catalogUrl is None:        # remember first only
+                    catalogUrl = url
+                continue                      # don't add as book forman
+
+            # regular book formats
+            if bookType == 'application/epub+zip':
+                # EPUB books are preferred and always put at the head of the list if found
+                bookDownloadUrls.insert(0, url)
+            else:
+                # Formats other than EPUB (eg. AZW), are appended as they are found
+                bookDownloadUrls.append(url)      # PDF, AZW3, FB2 …
+
+        # final decision 
+        if bookDownloadUrls:                      # the book
+            metadata.links = bookDownloadUrls
+        elif catalogUrl:                          # the catalog
+            metadata.links = []                   # nothing to download
+            metadata.catalogUrl = catalogUrl      # navigation attribute
+        else:                                     # nor book neither catalog
+            metadata.links = []
+
         return metadata
 
     def findNextUrl(self, feed):
@@ -236,3 +256,41 @@ class OpdsBooksModel(QAbstractTableModel):
             timestamp = datetime.datetime.strptime(parsableTimestamp, '%Y-%m-%dT%H:%M:%S')
             book.timestamp = timestamp
         self.filterBooks()
+
+    def loadSubcatalogs(self, catalog_dict):
+
+        # Replaces current booklist with "virtual" catalog records
+        # 
+        # each subcatalog became calibre.ebooks.metadata.Metadata object,
+        # with:
+        #     • catalogUrl  – link to next level OPDS
+        #     • links       – []  (void ⇒ this is the catalog, not book)
+        #     • authors/author/tags – void lists to prevent crash
+        #       of existing methods data() and filterBooks()
+        #     • timestamp   – None (catalog has no update date)
+        # 
+        # Parameters
+        # ----------
+        # catalog_dict : dict[str, str]
+        #     Dictionary «header → URL», received from downloadOpdsRootCatalog().
+
+        virtual_books = []
+        for title, url in catalog_dict.items():
+            m = Metadata(title, [])   # base object with void authors list
+
+            # --- fields for other plugin functions -----------------
+            m.author  = []            # for data()  (Author(s) column)
+            m.authors = []            # Calibre stores authors here
+            m.tags    = []            # for «Hide Newspapers» filter
+            # -----------------------------------------------------------------
+
+            m.catalogUrl = url        # attribute: this is catalog
+            m.links      = []         # no links ⇒ not book
+            m.timestamp  = None
+            virtual_books.append(m)
+
+        # restart model with standard method to refresh view
+        self.beginResetModel()
+        self.books = virtual_books
+        self.filterBooks()            # apply active filters
+        self.endResetModel()
