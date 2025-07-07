@@ -8,7 +8,7 @@ __license__   = "GPL v3"
 import sys
 import datetime
 from PyQt6.QtCore import Qt, QSortFilterProxyModel, QStringListModel, QEvent
-from PyQt6.QtWidgets import QDialog, QGridLayout, QLineEdit, QComboBox, QPushButton, QCheckBox, QMessageBox, QLabel, QAbstractItemView, QTableView, QHeaderView
+from PyQt6.QtWidgets import QDialog, QGridLayout, QLineEdit, QComboBox, QPushButton, QCheckBox, QMessageBox, QLabel, QAbstractItemView, QTableView, QHeaderView, QVBoxLayout, QListWidget, QListWidgetItem, QHBoxLayout
 
 from calibre_plugins.opds_client.model import OpdsBooksModel
 from calibre_plugins.opds_client.config import prefs
@@ -221,7 +221,9 @@ class OpdsDialog(QDialog):
 
     def downloadBook(self, book):
         if len(book.links) > 0:
-            self.gui.download_ebook(book.links[0])
+            # Show Select format dialog
+            dialog = SelectFormatDialog(self.gui, book.links, self)
+            dialog.exec() # Use exec() for modal
 
     def fixBookTimestamps(self):
         selectionmodel = self.library_view.selectionModel()
@@ -324,3 +326,55 @@ class OpdsDialog(QDialog):
         self.model.filterBooks()
         self.model.endResetModel()
         self.resizeAllLibraryViewLinesToHeaderHeight()
+
+class SelectFormatDialog(QDialog):
+    """
+    Диалог для выбора формата книги перед загрузкой.
+    """
+    def __init__(self, gui, links, parent=None):
+        super().__init__(parent)
+        self.gui = gui
+        self.links = links
+        self.selected_url = None
+
+        self.setWindowTitle('Select format')
+        self.layout = QVBoxLayout(self)
+
+        # Format list
+        self.list_widget = QListWidget(self)
+        for url in self.links:
+            # Extract extention as format name
+            format_name = url.split('/')[-1].split('?')[0].split('.')[-1].upper()
+            item = QListWidgetItem(f'{format_name} ({url.split("/")[-1]})')
+            item.setData(Qt.ItemDataRole.UserRole, url) # Save URL in element data
+            self.list_widget.addItem(item)
+        
+        self.list_widget.itemDoubleClicked.connect(self.accept) # Double click to download
+        self.layout.addWidget(self.list_widget)
+
+        # Buttons
+        self.button_layout = QHBoxLayout()
+        self.download_button = QPushButton('Download selected format', self)
+        self.cancel_button = QPushButton('Cancel', self)
+        
+        self.button_layout.addWidget(self.download_button)
+        self.button_layout.addWidget(self.cancel_button)
+        self.layout.addLayout(self.button_layout)
+
+        # Connect signals
+        self.download_button.clicked.connect(self.accept)
+        self.cancel_button.clicked.connect(self.reject)
+
+    def accept(self):
+        """
+        Redefine accept method for download processing.
+        """
+        current_item = self.list_widget.currentItem()
+        if not current_item:
+            return # Nothing was selected
+        # Get URL from element data
+        self.selected_url = current_item.data(Qt.ItemDataRole.UserRole)
+        if self.selected_url:
+            self.gui.download_ebook(self.selected_url)
+        
+        super().accept() # Close with "ОК"
