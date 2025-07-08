@@ -318,7 +318,8 @@ class OpdsDialog(QDialog):
     # -----------------------------------------------------------------
     def _navigateBack(self):
         if not self.catalogHistory:
-            return                                  # already at root
+            return
+        self.model._stop_pager()
         prev_books, prev_header = self.catalogHistory.pop()
         self.model.beginResetModel()
         self.model.books = prev_books
@@ -328,9 +329,7 @@ class OpdsDialog(QDialog):
         self.resizeAllLibraryViewLinesToHeaderHeight()
 
 class SelectFormatDialog(QDialog):
-    """
-    Диалог для выбора формата книги перед загрузкой.
-    """
+    # Select format before download
     def __init__(self, gui, links, parent=None):
         super().__init__(parent)
         self.gui = gui

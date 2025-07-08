@@ -100,28 +100,24 @@ class OpdsBooksModel(QAbstractTableModel):
         return (firstTitle, catalogEntries)
 
     def downloadOpdsCatalog(self, gui, opdsCatalogUrl):
-        # Downloads first page, others in background
-        print("downloading catalog first page: %s" % opdsCatalogUrl)
+        # Download first page and rise _PagerWorker for others
+        self._stop_pager()
+
+        print(f'downloading catalog first page: {opdsCatalogUrl}')
         feed = feedparser.parse(opdsCatalogUrl)
 
         self.beginResetModel()
         self.books = self.makeMetadataFromParsedOpds(feed.entries)
         self.filteredBooks = [b for b in self.books
-                              if (not self.isFilteredNews(b))
-                              and (not self.isFilteredAlreadyInLibrary(b))]
+                              if not self.isFilteredNews(b)
+                              and not self.isFilteredAlreadyInLibrary(b)]
         self.endResetModel()
 
-        # start loading tail
-        nextUrl = self.findNextUrl(feed.feed)
-        if not nextUrl: # single page
+        next_url = self.findNextUrl(feed.feed)
+        if not next_url:                             # single page - skip
             return
 
-        # kill running old thread
-        if hasattr(self, '_pager') and self._pager.isRunning():
-            self._pager.quit()
-            self._pager.wait()
-
-        self._pager = self._PagerWorker(self, nextUrl)
+        self._pager = self._PagerWorker(self, next_url)
         self._pager.batchReady.connect(self._append_batch)
         self._pager.start()
 
@@ -289,21 +285,20 @@ class OpdsBooksModel(QAbstractTableModel):
         # ----------
         # catalog_dict : dict[str, str]
         #     Dictionary «header → URL», received from downloadOpdsRootCatalog().
-
+        self._stop_pager()
         virtual_books = []
         for title, url in catalog_dict.items():
-            m = Metadata(title, [])   # base object with void authors list
-
-            # --- fields for other plugin functions -----------------
-            m.author  = []            # for data()  (Author(s) column)
-            m.authors = []            # Calibre stores authors here
-            m.tags    = []            # for «Hide Newspapers» filter
-            # -----------------------------------------------------------------
-
-            m.catalogUrl = url        # attribute: this is catalog
-            m.links      = []         # no links ⇒ not book
-            m.timestamp  = None
+            m = Metadata(title, [])
+            m.author = m.authors = m.tags = []
+            m.catalogUrl = url
+            m.links = []
+            m.timestamp = None
             virtual_books.append(m)
+
+        self.beginResetModel()
+        self.books = virtual_books
+        self.filterBooks()
+        self.endResetModel()
 
         # restart model with standard method to refresh view
         self.beginResetModel()
@@ -319,15 +314,17 @@ class OpdsBooksModel(QAbstractTableModel):
             self._url   = start_url
         def run(self):
             url = self._url
-            while url:
-                feed = feedparser.parse(url)
+            while url and not self.isInterruptionRequested():
+                feed  = feedparser.parse(url)
                 books = self._model.makeMetadataFromParsedOpds(feed.entries)
-                self.batchReady.emit(books)          # отдали пакет GUI-потоку
+                if self.isInterruptionRequested():
+                    break
+                self.batchReady.emit(books)
                 url = self._model.findNextUrl(feed.feed)
 
     def _append_batch(self, books):
         # Add next packet, keeping sorting and filters
-        # фильтры те же, что и в filterBooks()
+        # same filters as in filerBooks()
         accepted = [b for b in books
                     if (not self.isFilteredNews(b))
                     and (not self.isFilteredAlreadyInLibrary(b))]
@@ -339,3 +336,17 @@ class OpdsBooksModel(QAbstractTableModel):
         self.books.extend(books)
         self.filteredBooks.extend(accepted)
         self.endInsertRows()
+
+    # ---------- вспомогательная ----------
+    def _stop_pager(self):
+        """Корректно гасим фоновый поток догрузки страниц."""
+        pager = getattr(self, '_pager', None)
+        if pager and pager.isRunning():
+            pager.requestInterruption()
+            try:
+                pager.batchReady.disconnect(self._append_batch)
+            except TypeError:
+                pass
+            pager.wait()
+            pager.deleteLater()
+        self._pager = None                           # important!
