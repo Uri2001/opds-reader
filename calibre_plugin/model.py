@@ -7,6 +7,10 @@ __license__   = "GPL v3"
 
 import datetime
 from PyQt5.Qt import Qt, QAbstractTableModel, QCoreApplication
+try:                                    # Qt5/6 совместимость
+    from PyQt6.QtCore import QThread, pyqtSignal, QModelIndex
+except ImportError:
+    from PyQt5.QtCore import QThread, pyqtSignal, QModelIndex
 from calibre.ebooks.metadata.book.base import Metadata
 from calibre.gui2 import error_dialog
 from calibre.web.feeds import feedparser
@@ -96,18 +100,30 @@ class OpdsBooksModel(QAbstractTableModel):
         return (firstTitle, catalogEntries)
 
     def downloadOpdsCatalog(self, gui, opdsCatalogUrl):
-        print("downloading catalog: %s" % opdsCatalogUrl)
-        opdsCatalogFeed = feedparser.parse(opdsCatalogUrl)
-        self.books = self.makeMetadataFromParsedOpds(opdsCatalogFeed.entries)
-        self.filterBooks()
-        QCoreApplication.processEvents()
-        nextUrl = self.findNextUrl(opdsCatalogFeed.feed)
-        while nextUrl is not None:
-            nextFeed = feedparser.parse(nextUrl)
-            self.books = self.books + self.makeMetadataFromParsedOpds(nextFeed.entries)
-            self.filterBooks()
-            QCoreApplication.processEvents()
-            nextUrl = self.findNextUrl(nextFeed.feed)
+        # Downloads first page, others in background
+        print("downloading catalog first page: %s" % opdsCatalogUrl)
+        feed = feedparser.parse(opdsCatalogUrl)
+
+        self.beginResetModel()
+        self.books = self.makeMetadataFromParsedOpds(feed.entries)
+        self.filteredBooks = [b for b in self.books
+                              if (not self.isFilteredNews(b))
+                              and (not self.isFilteredAlreadyInLibrary(b))]
+        self.endResetModel()
+
+        # start loading tail
+        nextUrl = self.findNextUrl(feed.feed)
+        if not nextUrl: # single page
+            return
+
+        # kill running old thread
+        if hasattr(self, '_pager') and self._pager.isRunning():
+            self._pager.quit()
+            self._pager.wait()
+
+        self._pager = self._PagerWorker(self, nextUrl)
+        self._pager.batchReady.connect(self._append_batch)
+        self._pager.start()
 
     def isCalibreOpdsServer(self):
         return self.serverHeader.startswith('calibre')
@@ -294,3 +310,32 @@ class OpdsBooksModel(QAbstractTableModel):
         self.books = virtual_books
         self.filterBooks()            # apply active filters
         self.endResetModel()
+    # --- download in background ----------------------------------------
+    class _PagerWorker(QThread):
+        batchReady = pyqtSignal(list)
+        def __init__(self, model, start_url):
+            super().__init__(model)
+            self._model = model
+            self._url   = start_url
+        def run(self):
+            url = self._url
+            while url:
+                feed = feedparser.parse(url)
+                books = self._model.makeMetadataFromParsedOpds(feed.entries)
+                self.batchReady.emit(books)          # отдали пакет GUI-потоку
+                url = self._model.findNextUrl(feed.feed)
+
+    def _append_batch(self, books):
+        # Add next packet, keeping sorting and filters
+        # фильтры те же, что и в filterBooks()
+        accepted = [b for b in books
+                    if (not self.isFilteredNews(b))
+                    and (not self.isFilteredAlreadyInLibrary(b))]
+        if not accepted:
+            return
+        first = len(self.filteredBooks)
+        last  = first + len(accepted) - 1
+        self.beginInsertRows(QModelIndex(), first, last)
+        self.books.extend(books)
+        self.filteredBooks.extend(accepted)
+        self.endInsertRows()
