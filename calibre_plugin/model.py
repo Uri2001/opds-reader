@@ -36,10 +36,6 @@ class OpdsBooksModel(QAbstractTableModel):
         self.filterBooks()
 
     def headerData(self, section, orientation, role):
-        if role == Qt.BackgroundRole and self._isBookInLibrary(opdsBook):
-            return QBrush(QColor(60, 120, 80, 60))
-        if role == Qt.ForegroundRole and self._isBookInLibrary(opdsBook):
-            return QBrush(QColor(200, 240, 200))
         if role != Qt.DisplayRole:
             return None
         if orientation == Qt.Vertical:
@@ -62,6 +58,14 @@ class OpdsBooksModel(QAbstractTableModel):
         if role == Qt.UserRole:
             # Return the Metadata object underlying each row
             return opdsBook
+        if role == Qt.BackgroundRole:
+            if self._isBookInLibrary(opdsBook):
+                return QBrush(QColor(60, 120, 80, 60))
+            return None
+        if role == Qt.ForegroundRole:
+            if self._isBookInLibrary(opdsBook):
+                return QBrush(QColor(200, 240, 200))
+            return None
         if role != Qt.DisplayRole:
             return None
         if col >= self.booktableColumnCount:

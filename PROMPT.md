@@ -41,3 +41,6 @@
 - Team-specific code style rules, logging policy, perf budgets, or feature flags.
 - Known OPDS servers/URLs safe for testing.
 - Any UI/UX constraints (shortcuts, focus handling, accessibility).
+
+## Known gotchas
+- Do not reference row data in `headerData`; a prior bug used `opdsBook` there and crashed. If you need row coloring (e.g., books already in library), handle it in `data()` roles (`BackgroundRole`/`ForegroundRole`) after pulling the row object.
