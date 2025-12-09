@@ -26,6 +26,8 @@
 - UI strings stay English; keep `_()` usage compatible with Calibre’s i18n.
 - Handle network/OPDS failures gracefully; no crashing the dialog. Keep pagination and navigation stack behavior intact.
 - Match current code style: minimal type hints, pragmatic prints for debug, small helper functions over large rewrites.
+- Table defaults: proxy sorting is enabled; initial sort is column 0 ascending. Keep sort in sync if you add columns or change headers.
+- CI/release: GitHub Actions builds `dist/opds_client-<version>-dev.zip` from `calibre_plugin/` and attaches it to a prerelease; avoid wrapping zips inside zips (no upload-artifact step).
 
 ## Validation (choose what fits the change)
 - Syntax check: `python -m compileall calibre_plugin`.
@@ -45,3 +47,4 @@
 ## Known gotchas
 - Do not reference row data in `headerData`; a prior bug used `opdsBook` there and crashed. If you need row coloring (e.g., books already in library), handle it in `data()` roles (`BackgroundRole`/`ForegroundRole`) after pulling the row object.
 - `feed.feed` may come without `links`; always guard `findNextUrl` against missing links/attrs to avoid AttributeError in pager/back navigation.
+- Calibre plugin packaging expects `__init__.py` at the top of the zip; package directly from `calibre_plugin/` contents, not an outer folder/zip.
