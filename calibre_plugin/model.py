@@ -21,6 +21,7 @@ import urllib.request
 import json
 import re
 from copy import deepcopy
+import time
 
 
 class OpdsBooksModel(QAbstractTableModel):
@@ -29,8 +30,9 @@ class OpdsBooksModel(QAbstractTableModel):
     filterBooksThatAreNewspapers = False
     filterBooksThatAreAlreadyInLibrary = False
     _current_base_url = ''
-    request_timeout = 20  # seconds
+    request_timeout = 30  # seconds
     pageLoaded = pyqtSignal(int)   # emits size of the batch added
+    pageFailed = pyqtSignal(str)   # emits error message
 
     def __init__(self, parent, books = [], db = None):
         QAbstractTableModel.__init__(self, parent)
@@ -360,7 +362,15 @@ class OpdsBooksModel(QAbstractTableModel):
         def run(self):
             url = self._url
             while url and not self.isInterruptionRequested():
-                feed  = self._model._parse_with_timeout(url, self._timeout)
+                try:
+                    feed  = self._model._parse_with_timeout(url, self._timeout, retries=1)
+                except Exception as exc:
+                    if not self.isInterruptionRequested():
+                        try:
+                            self._model.pageFailed.emit(str(exc))
+                        except Exception:
+                            pass
+                    break
                 books = self._model.makeMetadataFromParsedOpds(feed.entries, base_url=url)
                 if self.isInterruptionRequested():
                     break
@@ -377,7 +387,7 @@ class OpdsBooksModel(QAbstractTableModel):
             self._timeout = timeout
         def run(self):
             try:
-                feed = self._model._parse_with_timeout(self._url, self._timeout)
+                feed = self._model._parse_with_timeout(self._url, self._timeout, retries=1)
                 if self.isInterruptionRequested():
                     return
                 self.feedReady.emit(feed)
@@ -454,11 +464,40 @@ class OpdsBooksModel(QAbstractTableModel):
         self._pager.batchReady.connect(self._append_batch)
         self._pager.start()
 
-    def _parse_with_timeout(self, url, timeout=None):
-        req = urllib.request.Request(url, headers={'User-Agent': 'calibre-opds-client'})
-        with urllib.request.urlopen(req, timeout=timeout or self.request_timeout) as resp:
-            data = resp.read()
-        return feedparser.parse(data)
+    def _parse_with_timeout(self, url, timeout=None, retries=0, backoff=2):
+        attempts = retries + 1
+        last_exc = None
+        for attempt in range(attempts):
+            if self._is_interrupted():
+                raise InterruptedError()
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'calibre-opds-client'})
+                with urllib.request.urlopen(req, timeout=timeout or self.request_timeout) as resp:
+                    data = resp.read()
+                return feedparser.parse(data)
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= attempts - 1:
+                    break
+                try:
+                    time.sleep(backoff)
+                except Exception:
+                    pass
+        if last_exc:
+            raise last_exc
+        return feedparser.parse(b'')
+
+    def _is_interrupted(self):
+        try:
+            pager = getattr(self, '_pager', None)
+            if pager and pager.isInterruptionRequested():
+                return True
+            worker = getattr(self, '_first_worker', None)
+            if worker and worker.isInterruptionRequested():
+                return True
+        except Exception:
+            pass
+        return False
 
     # ---------- url helpers ----------
     def _absolutize(self, url, base):

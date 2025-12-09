@@ -51,6 +51,7 @@ class OpdsDialog(QDialog):
         # The model for the book list
         self.model = OpdsBooksModel(None, self.dummy_books(), self.db)
         self.model.pageLoaded.connect(self._onPageLoaded)
+        self.model.pageFailed.connect(self._onPageFailed)
         self.searchproxymodel = QSortFilterProxyModel(self)
         self.searchproxymodel.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self.searchproxymodel.setFilterKeyColumn(-1)
@@ -496,6 +497,14 @@ class OpdsDialog(QDialog):
             batch_size = 0
         self.statusLabel.setText(f'Loaded {total} items (+{batch_size})')
         self._updateEmptyState()
+
+    def _onPageFailed(self, message: str):
+        # Show paging failure but keep already loaded data
+        self._setError(f'Paging stopped: {message}')
+        total = self.searchproxymodel.rowCount()
+        self.statusLabel.setText(f'Stopped at {total} items')
+        self._updateEmptyState()
+        self._isLoading = False
 
     def _restoreColumnWidths(self):
         header = self.library_view.horizontalHeader()
