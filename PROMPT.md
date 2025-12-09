@@ -44,3 +44,4 @@
 
 ## Known gotchas
 - Do not reference row data in `headerData`; a prior bug used `opdsBook` there and crashed. If you need row coloring (e.g., books already in library), handle it in `data()` roles (`BackgroundRole`/`ForegroundRole`) after pulling the row object.
+- `feed.feed` may come without `links`; always guard `findNextUrl` against missing links/attrs to avoid AttributeError in pager/back navigation.

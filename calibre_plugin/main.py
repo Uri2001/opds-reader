@@ -109,6 +109,8 @@ class OpdsDialog(QDialog):
         self.library_view.horizontalHeader().setSectionResizeMode(1, HEADER_STRETCH)
         self.library_view.horizontalHeader().setSectionResizeMode(2, HEADER_STRETCH)
         self.library_view.setSortingEnabled(True)
+        self.library_view.sortByColumn(0, Qt.AscendingOrder)
+        self.searchproxymodel.sort(0, Qt.AscendingOrder)
         self.library_view.setStyleSheet(
             "QTableView::item:hover { background-color: rgba(80, 120, 180, 80); }\n"
             "QTableView { gridline-color: rgba(255,255,255,25); }"

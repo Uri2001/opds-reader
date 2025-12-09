@@ -243,9 +243,14 @@ class OpdsBooksModel(QAbstractTableModel):
         return metadata
 
     def findNextUrl(self, feed):
-        for link in feed.links:
-            if link.rel == u'next':
-                return link.href
+        if feed is None:
+            return None
+        links = getattr(feed, 'links', None) or []
+        for link in links:
+            rel = getattr(link, 'rel', None)
+            href = getattr(link, 'href', None)
+            if rel == u'next' and href:
+                return href
         return None
 
     def downloadMetadataUsingCalibreRestApi(self, opdsUrl):
