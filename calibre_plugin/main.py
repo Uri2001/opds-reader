@@ -8,6 +8,7 @@ __license__   = "GPL v3"
 import sys
 import datetime
 import webbrowser
+import urllib.parse
 try:
     from PyQt6.QtCore import Qt, QSortFilterProxyModel, QStringListModel, QEvent, QPoint, QItemSelectionModel
     from PyQt6.QtWidgets import (
@@ -356,8 +357,9 @@ class OpdsDialog(QDialog):
         self._setError('')
         QApplication.processEvents()
         try:
-            self.currentCatalogUrl = url
-            self.model.downloadOpdsCatalog(self.gui, url)
+            resolved_url = self._resolveUrl(url)
+            self.currentCatalogUrl = resolved_url
+            self.model.downloadOpdsCatalog(self.gui, resolved_url)
             if self.model.isCalibreOpdsServer():
                 self.model.downloadMetadataUsingCalibreRestApi(
                     self.opdsUrlEditor.currentText()
@@ -492,6 +494,13 @@ class OpdsDialog(QDialog):
         header = self.library_view.horizontalHeader()
         widths = [header.sectionSize(i) for i in range(self.model.booktableColumnCount)]
         prefs['column_widths'] = widths
+
+    def _resolveUrl(self, url: str) -> str:
+        base = self.currentCatalogUrl or self.opdsUrlEditor.currentText()
+        try:
+            return urllib.parse.urljoin(base, url)
+        except Exception:
+            return url
 
     def _currentSelectionBooks(self):
         selectionmodel = self.library_view.selectionModel()

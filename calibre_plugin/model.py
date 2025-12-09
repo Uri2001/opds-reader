@@ -28,6 +28,7 @@ class OpdsBooksModel(QAbstractTableModel):
     booktableColumnCount = 3
     filterBooksThatAreNewspapers = False
     filterBooksThatAreAlreadyInLibrary = False
+    _current_base_url = ''
 
     def __init__(self, parent, books = [], db = None):
         QAbstractTableModel.__init__(self, parent)
@@ -81,6 +82,7 @@ class OpdsBooksModel(QAbstractTableModel):
         return None
 
     def downloadOpdsRootCatalog(self, gui, opdsUrl, displayDialogOnErrors):
+        self._current_base_url = opdsUrl
         feed = feedparser.parse(opdsUrl)
         if 'bozo_exception' in feed:
             exception = feed['bozo_exception']
@@ -106,24 +108,26 @@ class OpdsBooksModel(QAbstractTableModel):
             firstLink = next(iter(links), None)
             if firstLink is not None:
                 print("firstLink: %s" % firstLink)
-                catalogEntries[title] = firstLink.href
+                catalogEntries[title] = self._absolutize(firstLink.href, opdsUrl)
         return (firstTitle, catalogEntries)
 
     def downloadOpdsCatalog(self, gui, opdsCatalogUrl):
         # Download first page and rise _PagerWorker for others
         self._stop_pager()
 
+        self._current_base_url = opdsCatalogUrl
+
         print(f'downloading catalog first page: {opdsCatalogUrl}')
         feed = feedparser.parse(opdsCatalogUrl)
 
         self.beginResetModel()
-        self.books = self.makeMetadataFromParsedOpds(feed.entries)
+        self.books = self.makeMetadataFromParsedOpds(feed.entries, opdsCatalogUrl)
         self.filteredBooks = [b for b in self.books
                               if not self.isFilteredNews(b)
                               and not self.isFilteredAlreadyInLibrary(b)]
         self.endResetModel()
 
-        next_url = self.findNextUrl(feed.feed)
+        next_url = self.findNextUrl(feed.feed, base_url=opdsCatalogUrl)
         if not next_url:                             # single page - skip
             return
 
@@ -180,14 +184,16 @@ class OpdsBooksModel(QAbstractTableModel):
         book.is_already_in_library = cached
         return cached
 
-    def makeMetadataFromParsedOpds(self, books):
+    def makeMetadataFromParsedOpds(self, books, base_url=None):
         metadatalist = []
+        base = base_url or self._current_base_url
         for book in books:
-            metadata = self.opdsToMetadata(book)
+            metadata = self.opdsToMetadata(book, base)
             metadatalist.append(metadata)
         return metadatalist
 
-    def opdsToMetadata(self, opdsBookStructure):
+    def opdsToMetadata(self, opdsBookStructure, base_url=None):
+        base = base_url or self._current_base_url
         authors = opdsBookStructure.author.replace(u'& ', u'&') if 'author' in opdsBookStructure else ''
         metadata = Metadata(opdsBookStructure.title, authors.split(u'&'))
         metadata.uuid = opdsBookStructure.id.replace('urn:uuid:', '', 1) if 'id' in opdsBookStructure else ''
@@ -211,7 +217,7 @@ class OpdsBooksModel(QAbstractTableModel):
         catalogUrl = None                     # ← this is not book but catalog
         links = opdsBookStructure.get('links', [])
         for link in links:
-            url = link.get('href', '')
+            url = self._absolutize(link.get('href', ''), base)
             bookType = link.get('type', '') or ''
             # Skip covers and thumbnails
             if bookType.startswith('image/'):
@@ -242,7 +248,7 @@ class OpdsBooksModel(QAbstractTableModel):
 
         return metadata
 
-    def findNextUrl(self, feed):
+    def findNextUrl(self, feed, base_url=None):
         if feed is None:
             return None
         links = getattr(feed, 'links', None) or []
@@ -250,7 +256,7 @@ class OpdsBooksModel(QAbstractTableModel):
             rel = getattr(link, 'rel', None)
             href = getattr(link, 'href', None)
             if rel == u'next' and href:
-                return href
+                return self._absolutize(href, base_url)
         return None
 
     def downloadMetadataUsingCalibreRestApi(self, opdsUrl):
@@ -348,11 +354,11 @@ class OpdsBooksModel(QAbstractTableModel):
             url = self._url
             while url and not self.isInterruptionRequested():
                 feed  = feedparser.parse(url)
-                books = self._model.makeMetadataFromParsedOpds(feed.entries)
+                books = self._model.makeMetadataFromParsedOpds(feed.entries, base_url=url)
                 if self.isInterruptionRequested():
                     break
                 self.batchReady.emit(books)
-                url = self._model.findNextUrl(feed.feed)
+                url = self._model.findNextUrl(feed.feed, base_url=url)
 
     def _append_batch(self, books):
         # Add next packet, keeping sorting and filters
@@ -382,3 +388,9 @@ class OpdsBooksModel(QAbstractTableModel):
             pager.wait()
             pager.deleteLater()
         self._pager = None                           # important!
+
+    # ---------- url helpers ----------
+    def _absolutize(self, url, base):
+        if not url:
+            return url
+        return urllib.parse.urljoin(base or '', url)

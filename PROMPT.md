@@ -48,3 +48,4 @@
 - Do not reference row data in `headerData`; a prior bug used `opdsBook` there and crashed. If you need row coloring (e.g., books already in library), handle it in `data()` roles (`BackgroundRole`/`ForegroundRole`) after pulling the row object.
 - `feed.feed` may come without `links`; always guard `findNextUrl` against missing links/attrs to avoid AttributeError in pager/back navigation.
 - Calibre plugin packaging expects `__init__.py` at the top of the zip; package directly from `calibre_plugin/` contents, not an outer folder/zip.
+- OPDS feeds often return relative `href` values; always `urljoin` against the current feed URL before following `next` links or nested catalog/book links. Passing raw relative URLs to `feedparser.parse()` yields empty/no-result feeds.
