@@ -25,12 +25,12 @@ jobs:
         shell: bash
         run: |
           ver=$(python - <<'PY'
-import pathlib, re
-text = pathlib.Path("calibre_plugin/__init__.py").read_text(encoding="utf-8")
-m = re.search(r"version\\s*=\\s*\\((\\d+),\\s*(\\d+),\\s*(\\d+)\\)", text)
-ver = ".".join(m.groups()) if m else "0.0.0"
-print(ver)
-PY
+          import pathlib, re
+          text = pathlib.Path("calibre_plugin/__init__.py").read_text(encoding="utf-8")
+          m = re.search(r"version\s*=\s*\((\d+),\s*(\d+),\s*(\d+)\)", text)
+          ver = ".".join(m.groups()) if m else "0.0.0"
+          print(ver)
+          PY
           )
           echo "version=$ver" >> "$GITHUB_OUTPUT"
 
