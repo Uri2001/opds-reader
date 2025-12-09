@@ -14,6 +14,7 @@ prefs = JSONConfig('plugins/opds_client')
 prefs.defaults['opds_url'] = ['http://localhost:8080/opds']
 prefs.defaults['hideNewspapers'] = True
 prefs.defaults['hideBooksAlreadyInLibrary'] = True
+prefs.defaults['column_widths'] = [320, 220, 140]
 
 class ConfigWidget(QWidget):
 

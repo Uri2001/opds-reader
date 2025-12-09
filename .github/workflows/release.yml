@@ -1,0 +1,59 @@
+name: Build and Release OPDS Plugin
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Compute version
+        id: meta
+        shell: bash
+        run: |
+          ver=$(python - <<'PY'
+import pathlib, re
+text = pathlib.Path("calibre_plugin/__init__.py").read_text(encoding="utf-8")
+m = re.search(r"version\\s*=\\s*\\((\\d+),\\s*(\\d+),\\s*(\\d+)\\)", text)
+ver = ".".join(m.groups()) if m else "0.0.0"
+print(ver)
+PY
+          )
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Build plugin zip
+        shell: bash
+        run: |
+          mkdir -p dist
+          cd calibre_plugin
+          zip -r ../dist/opds_client-${{ steps.meta.outputs.version }}.zip . -x "**/__pycache__**" "**/*.pyc"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opds-client-${{ steps.meta.outputs.version }}
+          path: dist/opds_client-${{ steps.meta.outputs.version }}.zip
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: dev-${{ steps.meta.outputs.version }}-${{ github.run_number }}
+          name: Dev build ${{ steps.meta.outputs.version }} (#${{ github.run_number }})
+          prerelease: true
+          files: dist/opds_client-${{ steps.meta.outputs.version }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

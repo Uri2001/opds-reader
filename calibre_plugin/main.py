@@ -7,8 +7,27 @@ __license__   = "GPL v3"
 
 import sys
 import datetime
-from PyQt6.QtCore import Qt, QSortFilterProxyModel, QStringListModel, QEvent
-from PyQt6.QtWidgets import QDialog, QGridLayout, QLineEdit, QComboBox, QPushButton, QCheckBox, QMessageBox, QLabel, QAbstractItemView, QTableView, QHeaderView, QVBoxLayout, QListWidget, QListWidgetItem, QHBoxLayout
+import webbrowser
+try:
+    from PyQt6.QtCore import Qt, QSortFilterProxyModel, QStringListModel, QEvent, QPoint, QItemSelectionModel
+    from PyQt6.QtWidgets import (
+        QDialog, QGridLayout, QLineEdit, QComboBox, QPushButton, QCheckBox,
+        QMessageBox, QLabel, QAbstractItemView, QTableView, QHeaderView,
+        QVBoxLayout, QListWidget, QListWidgetItem, QHBoxLayout, QMenu,
+        QStackedLayout, QWidget
+    )
+    from PyQt6.QtGui import QAction, QGuiApplication, QBrush, QColor
+    HEADER_STRETCH = QHeaderView.ResizeMode.Stretch
+except ImportError:
+    from PyQt5.QtCore import Qt, QSortFilterProxyModel, QStringListModel, QEvent, QPoint, QItemSelectionModel
+    from PyQt5.QtWidgets import (
+        QDialog, QGridLayout, QLineEdit, QComboBox, QPushButton, QCheckBox,
+        QMessageBox, QLabel, QAbstractItemView, QTableView, QHeaderView,
+        QVBoxLayout, QListWidget, QListWidgetItem, QHBoxLayout, QMenu,
+        QStackedLayout, QWidget
+    )
+    from PyQt5.QtGui import QAction, QGuiApplication, QBrush, QColor
+    HEADER_STRETCH = QHeaderView.Stretch
 
 from calibre_plugins.opds_client.model import OpdsBooksModel
 from calibre_plugins.opds_client.config import prefs
@@ -33,129 +52,151 @@ class OpdsDialog(QDialog):
         self.searchproxymodel = QSortFilterProxyModel(self)
         self.searchproxymodel.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self.searchproxymodel.setFilterKeyColumn(-1)
+        self.searchproxymodel.setDynamicSortFilter(True)
+        self.searchproxymodel.setSortCaseSensitivity(Qt.CaseInsensitive)
         self.searchproxymodel.setSourceModel(self.model)
 
-        self.layout = QGridLayout()
+        self.layout = QVBoxLayout()
         self.setLayout(self.layout)
 
         self.setWindowTitle('OPDS Client')
         self.setWindowIcon(icon)
 
-        labelColumnWidths = []
-
-        self.opdsUrlLabel = QLabel('OPDS URL: ')
-        self.layout.addWidget(self.opdsUrlLabel, 0, 0)
-        labelColumnWidths.append(self.layout.itemAtPosition(0, 0).sizeHint().width())
-
         config.convertSingleStringOpdsUrlPreferenceToListOfStringsPreference()
+        self.opdsUrlLabel = QLabel('OPDS URL: ')
         self.opdsUrlEditor = QComboBox(self)
         self.opdsUrlEditor.activated.connect(self.opdsUrlEditorActivated)
         self.opdsUrlEditor.addItems(prefs['opds_url'])
         self.opdsUrlEditor.setEditable(True)
         self.opdsUrlEditor.setInsertPolicy(QComboBox.InsertAtTop)
-        self.layout.addWidget(self.opdsUrlEditor, 0, 1, 1, 3)
         self.opdsUrlLabel.setBuddy(self.opdsUrlEditor)
 
-        buttonColumnNumber = 7
-        buttonColumnWidths = []
+        self.refreshButton = QPushButton('Refresh', self)
+        self.refreshButton.setAutoDefault(False)
+        self.refreshButton.clicked.connect(self._refreshCurrentCatalog)
+
         self.about_button = QPushButton('About', self)
         self.about_button.setAutoDefault(False)
         self.about_button.clicked.connect(self.about)
-        self.layout.addWidget(self.about_button, 0, buttonColumnNumber)
-        buttonColumnWidths.append(self.layout.itemAtPosition(0, buttonColumnNumber).sizeHint().width()) 
 
-        # Initially download the catalogs found in the root catalog of the URL
-        # selected at startup.  Fail quietly on failing to open the URL
-        catalogsTuple = self.model.downloadOpdsRootCatalog(self.gui, self.opdsUrlEditor.currentText(), False)
-        print(catalogsTuple)
-        firstCatalogTitle = catalogsTuple[0]
-        self.currentOpdsCatalogs = catalogsTuple[1] # A dictionary of title->feedURL
+        self.statusLabel = QLabel('Ready', self)
+        self._isLoading = False
+        self.errorLabel = QLabel('', self)
+        self.errorLabel.setStyleSheet('color: #e5534b;')
+        self.errorLabel.setWordWrap(True)
 
-        self.opdsCatalogSelectorLabel = QLabel('OPDS Catalog:')
-        self.layout.addWidget(self.opdsCatalogSelectorLabel, 1, 0)
-        labelColumnWidths.append(self.layout.itemAtPosition(1, 0).sizeHint().width())
+        self.backButton = QPushButton('Back', self)
+        self.backButton.setAutoDefault(False)
+        self.backButton.clicked.connect(self._navigateBack)
 
-        self.opdsCatalogSelector = QComboBox(self)
-        self.opdsCatalogSelector.setEditable(False)
-        self.opdsCatalogSelectorModel = QStringListModel(self.currentOpdsCatalogs.keys())
-        self.opdsCatalogSelector.setModel(self.opdsCatalogSelectorModel)
-        self.opdsCatalogSelector.setCurrentText(firstCatalogTitle)
-        self.layout.addWidget(self.opdsCatalogSelector, 1, 1, 1, 3)
-
-        self.download_opds_button = QPushButton('Download OPDS', self)
-        self.download_opds_button.setAutoDefault(False)
-        self.download_opds_button.clicked.connect(self.download_opds)
-        self.layout.addWidget(self.download_opds_button, 1, buttonColumnNumber)
-        buttonColumnWidths.append(self.layout.itemAtPosition(1, buttonColumnNumber).sizeHint().width()) 
+        self.breadcrumbLabel = QLabel('Root', self)
 
         # Search GUI
         self.searchEditor = QLineEdit(self)
+        self.searchEditor.setPlaceholderText('Search in current catalog…')
         self.searchEditor.returnPressed.connect(self.searchBookList)
-        self.layout.addWidget(self.searchEditor, 2, buttonColumnNumber - 2, 1, 2)
 
         self.searchButton = QPushButton('Search', self)
         self.searchButton.setAutoDefault(False)
         self.searchButton.clicked.connect(self.searchBookList)
-        self.layout.addWidget(self.searchButton, 2, buttonColumnNumber)
-        buttonColumnWidths.append(self.layout.itemAtPosition(2, buttonColumnNumber).sizeHint().width())
 
         # The main book list
         self.library_view = QTableView(self)
         self.library_view.setAlternatingRowColors(True)
         self.library_view.setModel(self.searchproxymodel)
-        self.library_view.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.library_view.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.library_view.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.library_view.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.resizeAllLibraryViewLinesToHeaderHeight()
-        self.library_view.resizeColumnsToContents()
-        self.layout.addWidget(self.library_view, 3, 0, 3, buttonColumnNumber + 1)
+        self.library_view.horizontalHeader().setSectionResizeMode(0, HEADER_STRETCH)
+        self.library_view.horizontalHeader().setSectionResizeMode(1, HEADER_STRETCH)
+        self.library_view.horizontalHeader().setSectionResizeMode(2, HEADER_STRETCH)
+        self.library_view.setSortingEnabled(True)
+        self.library_view.setStyleSheet(
+            "QTableView::item:hover { background-color: rgba(80, 120, 180, 80); }\n"
+            "QTableView { gridline-color: rgba(255,255,255,25); }"
+        )
+        self.library_view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.library_view.customContextMenuRequested.connect(self._showContextMenu)
 
+        # Stack to show empty state
+        self.emptyLabel = QLabel('No results', self)
+        self.emptyLabel.setAlignment(Qt.AlignCenter)
+        self.emptyLabel.setStyleSheet('color: #b0b0b0;')
+        self.tableStackWidget = QWidget(self)
+        self.tableStack = QStackedLayout(self.tableStackWidget)
+        self.tableStack.setStackingMode(QStackedLayout.StackingMode.StackAll if hasattr(QStackedLayout, 'StackingMode') else QStackedLayout.StackAll)
+        self.tableStack.addWidget(self.library_view)
+        self.tableStack.addWidget(self.emptyLabel)
+
+        # Filters and actions
         self.hideNewsCheckbox = QCheckBox('Hide Newspapers', self)
+        self.hideNewsCheckbox.setToolTip('Hide entries marked as News in OPDS tags.')
         self.hideNewsCheckbox.clicked.connect(self.setHideNewspapers)
         self.hideNewsCheckbox.setChecked(prefs['hideNewspapers'])
-        self.layout.addWidget(self.hideNewsCheckbox, 6, 0, 1, 3)
 
         self.hideBooksAlreadyInLibraryCheckbox = QCheckBox('Hide books already in library', self)
+        self.hideBooksAlreadyInLibraryCheckbox.setToolTip('Hide rows that match books already present in the local library.')
         self.hideBooksAlreadyInLibraryCheckbox.clicked.connect(self.setHideBooksAlreadyInLibrary)
         self.hideBooksAlreadyInLibraryCheckbox.setChecked(prefs['hideBooksAlreadyInLibrary'])
-        self.layout.addWidget(self.hideBooksAlreadyInLibraryCheckbox, 7, 0, 1, 3)
 
-        # Let the checkbox initial state control the filtering
-        self.model.setFilterBooksThatAreNewspapers(self.hideNewsCheckbox.isChecked())
-        self.model.setFilterBooksThatAreAlreadyInLibrary(self.hideBooksAlreadyInLibraryCheckbox.isChecked())
-
-        self.downloadButton = QPushButton('Download selected books', self)
+        self.downloadButton = QPushButton('Download selected (0)', self)
         self.downloadButton.setAutoDefault(False)
         self.downloadButton.clicked.connect(self.downloadSelectedBooks)
-        self.layout.addWidget(self.downloadButton, 6, buttonColumnNumber)
-        buttonColumnWidths.append(self.layout.itemAtPosition(6, buttonColumnNumber).sizeHint().width()) 
+        self.downloadButton.setEnabled(False)
 
         self.fixTimestampButton = QPushButton('Fix timestamps of selection', self)
         self.fixTimestampButton.setAutoDefault(False)
         self.fixTimestampButton.clicked.connect(self.fixBookTimestamps)
-        self.layout.addWidget(self.fixTimestampButton, 7, buttonColumnNumber)
-        buttonColumnWidths.append(self.layout.itemAtPosition(7, buttonColumnNumber).sizeHint().width()) 
+        self.fixTimestampButton.setEnabled(False)
 
-        # Make all columns of the grid layout the same width as the button column
-        buttonColumnWidth = max(buttonColumnWidths)
-        for columnNumber in range(0, buttonColumnNumber):
-            self.layout.setColumnMinimumWidth(columnNumber, buttonColumnWidth)
+        # Layout assembly
+        topRow = QHBoxLayout()
+        topRow.addWidget(self.opdsUrlLabel)
+        topRow.addWidget(self.opdsUrlEditor, 1)
+        topRow.addWidget(self.refreshButton)
+        topRow.addStretch(1)
+        topRow.addWidget(self.about_button)
+        self.layout.addLayout(topRow)
+        self.layout.addWidget(self.errorLabel)
 
-        # Make sure the first column isn't wider than the labels it holds
-        labelColumnWidth = max(labelColumnWidths)
-        self.layout.setColumnMinimumWidth(0, labelColumnWidth)
+        # old widgets kept hidden but out of main layout
+        self.opdsCatalogSelectorLabel = QLabel('OPDS Catalog:')
+        self.opdsCatalogSelector = QComboBox(self)
+        self.opdsCatalogSelectorModel = QStringListModel([])
+        self.opdsCatalogSelector.setModel(self.opdsCatalogSelectorModel)
+        self.download_opds_button = QPushButton('Download OPDS', self)
+        for w in (self.opdsCatalogSelectorLabel, self.opdsCatalogSelector, self.download_opds_button):
+            w.hide()
+
+        searchRow = QHBoxLayout()
+        searchRow.addWidget(self.backButton)
+        searchRow.addWidget(self.breadcrumbLabel)
+        searchRow.addStretch(1)
+        searchRow.addWidget(self.statusLabel)
+        searchRow.addSpacing(8)
+        searchRow.addWidget(self.searchEditor, 1)
+        searchRow.addWidget(self.searchButton)
+        self.layout.addLayout(searchRow)
+
+        self.layout.addWidget(self.tableStackWidget, 1)
+
+        filtersRow = QHBoxLayout()
+        filtersRow.addWidget(self.hideNewsCheckbox)
+        filtersRow.addStretch(1)
+        filtersRow.addWidget(self.downloadButton)
+        self.layout.addLayout(filtersRow)
+
+        bottomRow = QHBoxLayout()
+        bottomRow.addWidget(self.hideBooksAlreadyInLibraryCheckbox)
+        bottomRow.addStretch(1)
+        bottomRow.addWidget(self.fixTimestampButton)
+        self.layout.addLayout(bottomRow)
 
         self.resize(self.sizeHint())
 
-        self.catalogHistory = []               # ← navigaztion stack
-        # --------------------------------------------------------------
-        # 1. Loading ROOT catalog as list od subcatalogs
-        catalogs = self.model.downloadOpdsRootCatalog(
-            self.gui, self.opdsUrlEditor.currentText(), False
-        )
-        self.currentOpdsCatalogs = catalogs[1]            # dict title→url
-        self.model.loadSubcatalogs(self.currentOpdsCatalogs)
+        self.catalogHistory = []               # ← navigation stack
+        self.currentCatalogUrl = None
+        self.breadcrumbs = ['Root']
+
+        self._loadRootCatalog(False)
 
         # 2. Hide outdated GUI elements
         self.opdsCatalogSelectorLabel.hide()
@@ -166,47 +207,43 @@ class OpdsDialog(QDialog):
         # 3. Navigation signals «Enter / DoubleClick / Backspace»
         self.library_view.doubleClicked.connect(self._activateCurrentItem)
         self.library_view.installEventFilter(self)
+        self.searchproxymodel.dataChanged.connect(self._updateEmptyState)
+        self.searchproxymodel.modelReset.connect(self._updateEmptyState)
+        self.searchproxymodel.rowsInserted.connect(self._updateEmptyState)
+        self.searchproxymodel.rowsRemoved.connect(self._updateEmptyState)
+        self.library_view.selectionModel().selectionChanged.connect(self._updateSelectionState)
+        self._restoreColumnWidths()
+        self._updateEmptyState()
+        self._updateSelectionState()
         
     def opdsUrlEditorActivated(self, text):
         prefs['opds_url'] = config.saveOpdsUrlCombobox(self.opdsUrlEditor)
-        catalogs = self.model.downloadOpdsRootCatalog(
-            self.gui, self.opdsUrlEditor.currentText(), True
-        )
-        self.currentOpdsCatalogs = catalogs[1]
-        self.model.loadSubcatalogs(self.currentOpdsCatalogs)
+        self._loadRootCatalog(True)
 
     def setHideNewspapers(self, checked):
         prefs['hideNewspapers'] = checked
         self.model.setFilterBooksThatAreNewspapers(checked)
         self.resizeAllLibraryViewLinesToHeaderHeight()
+        self._updateEmptyState()
 
     def setHideBooksAlreadyInLibrary(self, checked):
         prefs['hideBooksAlreadyInLibrary'] = checked
         self.model.setFilterBooksThatAreAlreadyInLibrary(checked)
         self.resizeAllLibraryViewLinesToHeaderHeight()
+        self._updateEmptyState()
 
     def searchBookList(self):
         searchString = self.searchEditor.text()
         print("starting book list search for: %s" % searchString)
         self.searchproxymodel.setFilterFixedString(searchString)
+        self._updateEmptyState()
 
     def about(self):
         text = get_resources('about.txt')
         QMessageBox.about(self, 'About the OPDS Client plugin', text.decode('utf-8'))
 
     def download_opds(self):
-        opdsCatalogUrl = self.currentOpdsCatalogs.get(self.opdsCatalogSelector.currentText(), None)
-        if opdsCatalogUrl is None:
-            # Just give up quietly
-            return
-        self.model.downloadOpdsCatalog(self.gui, opdsCatalogUrl)
-        if self.model.isCalibreOpdsServer():
-            self.model.downloadMetadataUsingCalibreRestApi(self.opdsUrlEditor.currentText())
-        self.library_view.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.library_view.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.library_view.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.resizeAllLibraryViewLinesToHeaderHeight()
-        self.resize(self.sizeHint())
+        self._refreshCurrentCatalog()
 
     def config(self):
         self.do_user_config(parent=self)
@@ -269,7 +306,11 @@ class OpdsDialog(QDialog):
         return books_list
 
     def resizeAllLibraryViewLinesToHeaderHeight(self):
-        rowHeight = self.library_view.horizontalHeader().height()
+        rowHeight = self.library_view.horizontalHeader().height() + 6
+        try:
+            self.library_view.verticalHeader().setDefaultSectionSize(rowHeight)
+        except Exception:
+            pass
         for rowNumber in range (0, self.library_view.model().rowCount()):
             self.library_view.setRowHeight(rowNumber, rowHeight)
 
@@ -300,33 +341,209 @@ class OpdsDialog(QDialog):
         if hasattr(meta, 'catalogUrl'):                # ← fixed
             # save current state for Backspace
             self.catalogHistory.append(
-                (list(self.model.books), self.model.serverHeader)
+                (list(self.model.books), self.model.serverHeader, self.currentCatalogUrl, list(self.breadcrumbs))
             )
+            self._updateBreadcrumb(getattr(meta, 'title', 'Catalog'), push=True)
             self._openCatalog(meta.catalogUrl)         # ← fixed
         else:
             self.downloadBook(meta)
 
     # -----------------------------------------------------------------
     def _openCatalog(self, url: str):
-        self.model.downloadOpdsCatalog(self.gui, url)
-        if self.model.isCalibreOpdsServer():
-            self.model.downloadMetadataUsingCalibreRestApi(
-                self.opdsUrlEditor.currentText()
-            )
-        self.resizeAllLibraryViewLinesToHeaderHeight()
+        self._setLoading(True, 'Loading…')
+        self._setError('')
+        try:
+            self.currentCatalogUrl = url
+            self.model.downloadOpdsCatalog(self.gui, url)
+            if self.model.isCalibreOpdsServer():
+                self.model.downloadMetadataUsingCalibreRestApi(
+                    self.opdsUrlEditor.currentText()
+                )
+            self.resizeAllLibraryViewLinesToHeaderHeight()
+        finally:
+            self._setLoading(False)
+            self._updateEmptyState()
+            self._updateSelectionState()
 
     # -----------------------------------------------------------------
     def _navigateBack(self):
         if not self.catalogHistory:
             return
         self.model._stop_pager()
-        prev_books, prev_header = self.catalogHistory.pop()
+        prev_books, prev_header, prev_url, prev_breadcrumbs = self.catalogHistory.pop()
         self.model.beginResetModel()
         self.model.books = prev_books
         self.model.serverHeader = prev_header
         self.model.filterBooks()
         self.model.endResetModel()
+        self.currentCatalogUrl = prev_url
+        self.breadcrumbs = prev_breadcrumbs
+        self._updateBreadcrumb()
         self.resizeAllLibraryViewLinesToHeaderHeight()
+        self._updateEmptyState()
+        self._updateSelectionState()
+
+    def _loadRootCatalog(self, displayDialogOnErrors):
+        self._setLoading(True, 'Loading root…')
+        try:
+            catalogsTuple = self.model.downloadOpdsRootCatalog(
+                self.gui, self.opdsUrlEditor.currentText(), displayDialogOnErrors
+            )
+            self.currentOpdsCatalogs = catalogsTuple[1]
+            self.currentCatalogUrl = None
+            self.catalogHistory = []
+            self.model.loadSubcatalogs(self.currentOpdsCatalogs)
+            self.breadcrumbs = ['Root']
+            self._updateBreadcrumb()
+            if catalogsTuple[0] is None:
+                self._setError('Failed to open the OPDS URL.')
+            elif not self.currentOpdsCatalogs:
+                self._setError('No catalogs found at the OPDS URL.')
+            else:
+                self._setError('')
+        finally:
+            self._setLoading(False)
+            self.resizeAllLibraryViewLinesToHeaderHeight()
+            self._updateEmptyState()
+            self._updateSelectionState()
+
+    def _refreshCurrentCatalog(self):
+        if self.currentCatalogUrl:
+            # Keep breadcrumb as-is when refreshing
+            self._openCatalog(self.currentCatalogUrl)
+        else:
+            self._loadRootCatalog(True)
+
+    def _setLoading(self, is_loading, message='Loading…'):
+        self._isLoading = is_loading
+        self.statusLabel.setText(message if is_loading else 'Ready')
+        self.searchButton.setEnabled(not is_loading)
+        self.refreshButton.setEnabled(not is_loading)
+        if is_loading:
+            self.downloadButton.setEnabled(False)
+            self.fixTimestampButton.setEnabled(False)
+        else:
+            self._updateSelectionState()
+
+    def _setError(self, text):
+        self.errorLabel.setText(text or '')
+
+    def _updateBreadcrumb(self, label=None, push=False):
+        if label:
+            if push:
+                self.breadcrumbs.append(label)
+            elif self.breadcrumbs:
+                self.breadcrumbs[-1] = label
+            else:
+                self.breadcrumbs = [label]
+        breadcrumb_text = ' > '.join(self.breadcrumbs)
+        self.breadcrumbLabel.setText(breadcrumb_text)
+
+    def _updateEmptyState(self, *_args):
+        rowCount = self.searchproxymodel.rowCount()
+        if rowCount == 0:
+            query = self.searchEditor.text().strip()
+            if query:
+                self.emptyLabel.setText(f"No matches for '{query}'")
+            else:
+                self.emptyLabel.setText('No results')
+            self.tableStack.setCurrentIndex(1)
+        else:
+            self.tableStack.setCurrentIndex(0)
+
+    def _updateSelectionState(self, *_args):
+        selectionmodel = self.library_view.selectionModel()
+        count = len(selectionmodel.selectedRows()) if selectionmodel else 0
+        self.downloadButton.setText(f'Download selected ({count})')
+        enabled = (count > 0) and (not self._isLoading)
+        self.downloadButton.setEnabled(enabled)
+        self.fixTimestampButton.setEnabled(enabled)
+
+    def _restoreColumnWidths(self):
+        header = self.library_view.horizontalHeader()
+        stored = prefs.get('column_widths', None)
+        if isinstance(stored, list) and len(stored) >= self.model.booktableColumnCount:
+            for idx in range(self.model.booktableColumnCount):
+                try:
+                    header.resizeSection(idx, int(stored[idx]))
+                except (TypeError, ValueError):
+                    pass
+        try:
+            header.sectionResized.connect(self._saveColumnWidths)
+        except Exception:
+            pass
+
+    def _saveColumnWidths(self, *_args):
+        header = self.library_view.horizontalHeader()
+        widths = [header.sectionSize(i) for i in range(self.model.booktableColumnCount)]
+        prefs['column_widths'] = widths
+
+    def _currentSelectionBooks(self):
+        selectionmodel = self.library_view.selectionModel()
+        if not selectionmodel or not selectionmodel.hasSelection():
+            return []
+        rows = selectionmodel.selectedRows()
+        books = []
+        for row in rows:
+            meta = row.data(Qt.UserRole)
+            if meta:
+                books.append(meta)
+        return books
+
+    def _showContextMenu(self, point: QPoint):
+        global_pos = self.library_view.viewport().mapToGlobal(point)
+        index = self.library_view.indexAt(point)
+        if index.isValid():
+            selection_model = self.library_view.selectionModel()
+            if selection_model is not None and not selection_model.isSelected(index):
+                selection_model.select(index, QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
+        selection = self._currentSelectionBooks()
+        if not selection:
+            return
+        menu = QMenu(self)
+
+        copyLinkAction = QAction('Copy link', self)
+        copyLinkAction.triggered.connect(lambda: self._copyLink(selection))
+        menu.addAction(copyLinkAction)
+
+        openInBrowserAction = QAction('Open in browser', self)
+        openInBrowserAction.triggered.connect(lambda: self._openInBrowser(selection))
+        menu.addAction(openInBrowserAction)
+
+        showMetadataAction = QAction('Show metadata', self)
+        showMetadataAction.triggered.connect(lambda: self._showMetadataDialog(selection))
+        menu.addAction(showMetadataAction)
+
+        menu.exec(global_pos)
+
+    def _copyLink(self, books):
+        link = None
+        first = books[0]
+        if getattr(first, 'links', []):
+            link = first.links[0]
+        elif hasattr(first, 'catalogUrl'):
+            link = first.catalogUrl
+        if link:
+            QGuiApplication.clipboard().setText(link)
+
+    def _openInBrowser(self, books):
+        link = None
+        first = books[0]
+        if getattr(first, 'links', []):
+            link = first.links[0]
+        elif hasattr(first, 'catalogUrl'):
+            link = first.catalogUrl
+        if link:
+            webbrowser.open(link)
+
+    def _showMetadataDialog(self, books):
+        first = books[0]
+        title = getattr(first, 'title', 'Metadata')
+        authors = ', '.join(getattr(first, 'author', []))
+        timestamp = getattr(first, 'timestamp', None)
+        ts_text = timestamp.strftime('%Y-%m-%d %H:%M:%S') if timestamp else '—'
+        info = f"Title: {title}\\nAuthor(s): {authors}\\nUpdated: {ts_text}"
+        QMessageBox.information(self, 'Metadata', info)
 
 class SelectFormatDialog(QDialog):
     # Select format before download

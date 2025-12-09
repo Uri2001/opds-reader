@@ -9,8 +9,10 @@ import datetime
 from PyQt5.Qt import Qt, QAbstractTableModel, QCoreApplication
 try:                                    # Qt5/6 совместимость
     from PyQt6.QtCore import QThread, pyqtSignal, QModelIndex
+    from PyQt6.QtGui import QBrush, QColor
 except ImportError:
     from PyQt5.QtCore import QThread, pyqtSignal, QModelIndex
+    from PyQt5.QtGui import QBrush, QColor
 from calibre.ebooks.metadata.book.base import Metadata
 from calibre.gui2 import error_dialog
 from calibre.web.feeds import feedparser
@@ -34,6 +36,10 @@ class OpdsBooksModel(QAbstractTableModel):
         self.filterBooks()
 
     def headerData(self, section, orientation, role):
+        if role == Qt.BackgroundRole and self._isBookInLibrary(opdsBook):
+            return QBrush(QColor(60, 120, 80, 60))
+        if role == Qt.ForegroundRole and self._isBookInLibrary(opdsBook):
+            return QBrush(QColor(200, 240, 200))
         if role != Qt.DisplayRole:
             return None
         if orientation == Qt.Vertical:
@@ -138,6 +144,7 @@ class OpdsBooksModel(QAbstractTableModel):
         self.beginResetModel()
         self.filteredBooks = []
         for book in self.books:
+            self._isBookInLibrary(book)
             if (not self.isFilteredNews(book)) and (not self.isFilteredAlreadyInLibrary(book)):
                 self.filteredBooks.append(book)
         self.endResetModel()
@@ -150,8 +157,24 @@ class OpdsBooksModel(QAbstractTableModel):
 
     def isFilteredAlreadyInLibrary(self, book):
         if self.filterBooksThatAreAlreadyInLibrary:
-            return self.db.has_book(book)
+            return self._isBookInLibrary(book)
         return False
+
+    def _isBookInLibrary(self, book):
+        if hasattr(book, 'catalogUrl'):
+            return False
+        cached = getattr(book, 'is_already_in_library', None)
+        if cached is not None:
+            return cached
+        if self.db is None:
+            book.is_already_in_library = False
+            return False
+        try:
+            cached = self.db.has_book(book)
+        except Exception:
+            cached = False
+        book.is_already_in_library = cached
+        return cached
 
     def makeMetadataFromParsedOpds(self, books):
         metadatalist = []
