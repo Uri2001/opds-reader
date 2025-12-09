@@ -41,12 +41,6 @@ jobs:
           cd calibre_plugin
           zip -r ../dist/opds_client-${{ steps.meta.outputs.version }}-dev.zip . -x "**/__pycache__**" "**/*.pyc"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: opds-client-${{ steps.meta.outputs.version }}-dev
-          path: dist/opds_client-${{ steps.meta.outputs.version }}-dev.zip
-
       - name: Create GitHub Release
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
