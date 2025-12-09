@@ -29,6 +29,8 @@ class OpdsBooksModel(QAbstractTableModel):
     filterBooksThatAreNewspapers = False
     filterBooksThatAreAlreadyInLibrary = False
     _current_base_url = ''
+    request_timeout = 20  # seconds
+    pageLoaded = pyqtSignal(int)   # emits size of the batch added
 
     def __init__(self, parent, books = [], db = None):
         QAbstractTableModel.__init__(self, parent)
@@ -112,28 +114,32 @@ class OpdsBooksModel(QAbstractTableModel):
         return (firstTitle, catalogEntries)
 
     def downloadOpdsCatalog(self, gui, opdsCatalogUrl):
-        # Download first page and rise _PagerWorker for others
+        """Backward-compatible synchronous load (still used by root)."""
         self._stop_pager()
+        self._current_base_url = opdsCatalogUrl
+        print(f'downloading catalog first page: {opdsCatalogUrl}')
+        feed = self._parse_with_timeout(opdsCatalogUrl, self.request_timeout)
+        self._apply_first_page(feed, opdsCatalogUrl)
 
+    def downloadOpdsCatalogAsync(self, gui, opdsCatalogUrl, on_ready, on_error):
+        """Asynchronous first-page fetch to avoid UI freeze."""
+        self._stop_pager()
+        self._cancel_first_worker()
         self._current_base_url = opdsCatalogUrl
 
-        print(f'downloading catalog first page: {opdsCatalogUrl}')
-        feed = feedparser.parse(opdsCatalogUrl)
+        worker = self._FirstPageWorker(self, opdsCatalogUrl, self.request_timeout)
 
-        self.beginResetModel()
-        self.books = self.makeMetadataFromParsedOpds(feed.entries, opdsCatalogUrl)
-        self.filteredBooks = [b for b in self.books
-                              if not self.isFilteredNews(b)
-                              and not self.isFilteredAlreadyInLibrary(b)]
-        self.endResetModel()
+        def handle_feed(feed):
+            try:
+                self._apply_first_page(feed, opdsCatalogUrl)
+                on_ready()
+            except Exception as exc:
+                on_error(str(exc))
 
-        next_url = self.findNextUrl(feed.feed, base_url=opdsCatalogUrl)
-        if not next_url:                             # single page - skip
-            return
-
-        self._pager = self._PagerWorker(self, next_url)
-        self._pager.batchReady.connect(self._append_batch)
-        self._pager.start()
+        worker.feedReady.connect(handle_feed)
+        worker.failed.connect(on_error)
+        worker.start()
+        self._first_worker = worker
 
     def isCalibreOpdsServer(self):
         return self.serverHeader.startswith('calibre')
@@ -346,19 +352,38 @@ class OpdsBooksModel(QAbstractTableModel):
     # --- download in background ----------------------------------------
     class _PagerWorker(QThread):
         batchReady = pyqtSignal(list)
-        def __init__(self, model, start_url):
+        def __init__(self, model, start_url, timeout):
             super().__init__(model)
             self._model = model
             self._url   = start_url
+            self._timeout = timeout
         def run(self):
             url = self._url
             while url and not self.isInterruptionRequested():
-                feed  = feedparser.parse(url)
+                feed  = self._model._parse_with_timeout(url, self._timeout)
                 books = self._model.makeMetadataFromParsedOpds(feed.entries, base_url=url)
                 if self.isInterruptionRequested():
                     break
                 self.batchReady.emit(books)
                 url = self._model.findNextUrl(feed.feed, base_url=url)
+
+    class _FirstPageWorker(QThread):
+        feedReady = pyqtSignal(object)
+        failed    = pyqtSignal(str)
+        def __init__(self, model, url, timeout):
+            super().__init__(model)
+            self._model = model
+            self._url   = url
+            self._timeout = timeout
+        def run(self):
+            try:
+                feed = self._model._parse_with_timeout(self._url, self._timeout)
+                if self.isInterruptionRequested():
+                    return
+                self.feedReady.emit(feed)
+            except Exception as exc:
+                if not self.isInterruptionRequested():
+                    self.failed.emit(str(exc))
 
     def _append_batch(self, books):
         # Add next packet, keeping sorting and filters
@@ -374,6 +399,10 @@ class OpdsBooksModel(QAbstractTableModel):
         self.books.extend(books)
         self.filteredBooks.extend(accepted)
         self.endInsertRows()
+        try:
+            self.pageLoaded.emit(len(accepted))
+        except Exception:
+            pass
 
     # ---------- вспомогательная ----------
     def _stop_pager(self):
@@ -385,9 +414,51 @@ class OpdsBooksModel(QAbstractTableModel):
                 pager.batchReady.disconnect(self._append_batch)
             except TypeError:
                 pass
-            pager.wait()
-            pager.deleteLater()
+            pager.wait(500)
+            if pager.isRunning():
+                pager.finished.connect(pager.deleteLater)
+            else:
+                pager.deleteLater()
         self._pager = None                           # important!
+
+    def _cancel_first_worker(self):
+        worker = getattr(self, '_first_worker', None)
+        if worker and worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(200)
+        self._first_worker = None
+
+    def _apply_first_page(self, feed, base_url):
+        # Save headers
+        if hasattr(feed, 'headers') and 'server' in feed.headers:
+            self.serverHeader = feed.headers['server']
+        else:
+            self.serverHeader = "none"
+
+        self.beginResetModel()
+        self.books = self.makeMetadataFromParsedOpds(feed.entries, base_url)
+        self.filteredBooks = [b for b in self.books
+                              if not self.isFilteredNews(b)
+                              and not self.isFilteredAlreadyInLibrary(b)]
+        self.endResetModel()
+        try:
+            self.pageLoaded.emit(len(self.filteredBooks))
+        except Exception:
+            pass
+
+        next_url = self.findNextUrl(getattr(feed, 'feed', None), base_url=base_url)
+        if not next_url:                             # single page - skip
+            return
+
+        self._pager = self._PagerWorker(self, next_url, self.request_timeout)
+        self._pager.batchReady.connect(self._append_batch)
+        self._pager.start()
+
+    def _parse_with_timeout(self, url, timeout=None):
+        req = urllib.request.Request(url, headers={'User-Agent': 'calibre-opds-client'})
+        with urllib.request.urlopen(req, timeout=timeout or self.request_timeout) as resp:
+            data = resp.read()
+        return feedparser.parse(data)
 
     # ---------- url helpers ----------
     def _absolutize(self, url, base):

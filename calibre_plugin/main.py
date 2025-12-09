@@ -50,6 +50,7 @@ class OpdsDialog(QDialog):
 
         # The model for the book list
         self.model = OpdsBooksModel(None, self.dummy_books(), self.db)
+        self.model.pageLoaded.connect(self._onPageLoaded)
         self.searchproxymodel = QSortFilterProxyModel(self)
         self.searchproxymodel.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self.searchproxymodel.setFilterKeyColumn(-1)
@@ -353,27 +354,39 @@ class OpdsDialog(QDialog):
 
     # -----------------------------------------------------------------
     def _openCatalog(self, url: str):
-        self._setLoading(True, 'Loading…')
+        self._setLoading(True, 'Loading first page…')
         self._setError('')
         QApplication.processEvents()
-        try:
-            resolved_url = self._resolveUrl(url)
-            self.currentCatalogUrl = resolved_url
-            self.model.downloadOpdsCatalog(self.gui, resolved_url)
-            if self.model.isCalibreOpdsServer():
-                self.model.downloadMetadataUsingCalibreRestApi(
-                    self.opdsUrlEditor.currentText()
-                )
+        resolved_url = self._resolveUrl(url)
+        self.currentCatalogUrl = resolved_url
+
+        def on_ready():
+            self._setLoading(False, 'Loaded first page')
             self.resizeAllLibraryViewLinesToHeaderHeight()
-        finally:
-            self._setLoading(False)
             self._updateEmptyState()
             self._updateSelectionState()
+            # If calibre server, fetch timestamps (can be slow; keep UI responsive)
+            if self.model.isCalibreOpdsServer():
+                try:
+                    self.model.downloadMetadataUsingCalibreRestApi(
+                        self.opdsUrlEditor.currentText()
+                    )
+                except Exception as exc:
+                    self._setError(f'Failed to fetch metadata: {exc}')
+
+        def on_error(msg):
+            self._setLoading(False)
+            self._setError(f'Failed to load catalog: {msg}')
+            self._updateEmptyState()
+            self._updateSelectionState()
+
+        self.model.downloadOpdsCatalogAsync(self.gui, resolved_url, on_ready, on_error)
 
     # -----------------------------------------------------------------
     def _navigateBack(self):
         if not self.catalogHistory:
             return
+        self.model._cancel_first_worker()
         self.model._stop_pager()
         prev_books, prev_header, prev_url, prev_breadcrumbs = self.catalogHistory.pop()
         self.model.beginResetModel()
@@ -475,6 +488,14 @@ class OpdsDialog(QDialog):
         enabled = (count > 0) and (not self._isLoading)
         self.downloadButton.setEnabled(enabled)
         self.fixTimestampButton.setEnabled(enabled)
+
+    def _onPageLoaded(self, batch_size: int):
+        # Update status to reflect progress
+        total = self.searchproxymodel.rowCount()
+        if batch_size is None:
+            batch_size = 0
+        self.statusLabel.setText(f'Loaded {total} items (+{batch_size})')
+        self._updateEmptyState()
 
     def _restoreColumnWidths(self):
         header = self.library_view.horizontalHeader()
