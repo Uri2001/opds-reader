@@ -11,8 +11,8 @@ import webbrowser
 try:
     from PyQt6.QtCore import Qt, QSortFilterProxyModel, QStringListModel, QEvent, QPoint, QItemSelectionModel
     from PyQt6.QtWidgets import (
-        QDialog, QGridLayout, QLineEdit, QComboBox, QPushButton, QCheckBox,
-        QMessageBox, QLabel, QAbstractItemView, QTableView, QHeaderView,
+        QApplication, QDialog, QGridLayout, QLineEdit, QComboBox, QPushButton,
+        QCheckBox, QMessageBox, QLabel, QAbstractItemView, QTableView, QHeaderView,
         QVBoxLayout, QListWidget, QListWidgetItem, QHBoxLayout, QMenu,
         QStackedLayout, QWidget
     )
@@ -21,8 +21,8 @@ try:
 except ImportError:
     from PyQt5.QtCore import Qt, QSortFilterProxyModel, QStringListModel, QEvent, QPoint, QItemSelectionModel
     from PyQt5.QtWidgets import (
-        QDialog, QGridLayout, QLineEdit, QComboBox, QPushButton, QCheckBox,
-        QMessageBox, QLabel, QAbstractItemView, QTableView, QHeaderView,
+        QApplication, QDialog, QGridLayout, QLineEdit, QComboBox, QPushButton,
+        QCheckBox, QMessageBox, QLabel, QAbstractItemView, QTableView, QHeaderView,
         QVBoxLayout, QListWidget, QListWidgetItem, QHBoxLayout, QMenu,
         QStackedLayout, QWidget
     )
@@ -354,6 +354,7 @@ class OpdsDialog(QDialog):
     def _openCatalog(self, url: str):
         self._setLoading(True, 'Loading…')
         self._setError('')
+        QApplication.processEvents()
         try:
             self.currentCatalogUrl = url
             self.model.downloadOpdsCatalog(self.gui, url)
@@ -387,6 +388,7 @@ class OpdsDialog(QDialog):
 
     def _loadRootCatalog(self, displayDialogOnErrors):
         self._setLoading(True, 'Loading root…')
+        QApplication.processEvents()
         try:
             catalogsTuple = self.model.downloadOpdsRootCatalog(
                 self.gui, self.opdsUrlEditor.currentText(), displayDialogOnErrors
@@ -421,6 +423,17 @@ class OpdsDialog(QDialog):
         self.statusLabel.setText(message if is_loading else 'Ready')
         self.searchButton.setEnabled(not is_loading)
         self.refreshButton.setEnabled(not is_loading)
+        try:
+            if is_loading:
+                QGuiApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            else:
+                QGuiApplication.restoreOverrideCursor()
+        except Exception:
+            pass
+        try:
+            QApplication.processEvents()
+        except Exception:
+            pass
         if is_loading:
             self.downloadButton.setEnabled(False)
             self.fixTimestampButton.setEnabled(False)
