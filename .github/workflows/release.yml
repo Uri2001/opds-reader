@@ -39,21 +39,21 @@ jobs:
         run: |
           mkdir -p dist
           cd calibre_plugin
-          zip -r ../dist/opds_client-${{ steps.meta.outputs.version }}.zip . -x "**/__pycache__**" "**/*.pyc"
+          zip -r ../dist/opds_client-${{ steps.meta.outputs.version }}-dev.zip . -x "**/__pycache__**" "**/*.pyc"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: opds-client-${{ steps.meta.outputs.version }}
-          path: dist/opds_client-${{ steps.meta.outputs.version }}.zip
+          name: opds-client-${{ steps.meta.outputs.version }}-dev
+          path: dist/opds_client-${{ steps.meta.outputs.version }}-dev.zip
 
       - name: Create GitHub Release
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: dev-${{ steps.meta.outputs.version }}-${{ github.run_number }}
-          name: Dev build ${{ steps.meta.outputs.version }} (#${{ github.run_number }})
+          name: Dev build ${{ steps.meta.outputs.version }}-dev (#${{ github.run_number }})
           prerelease: true
-          files: dist/opds_client-${{ steps.meta.outputs.version }}.zip
+          files: dist/opds_client-${{ steps.meta.outputs.version }}-dev.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
