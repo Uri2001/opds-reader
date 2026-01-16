@@ -1,0 +1,8 @@
+-*- coding: utf-8 -*-
+
+* Calibre OPDS client
+** What's this?
+This is a refactored version of this [[https://github.com/steinarb/opds-reader.git]][[calibre plugin]] that is an OPDS client intended to read the contents of another calibre installation, find the differences to the current calibre and offer to copy books from the other calibre into the current calibre
+** What was changed?
+- enhanced navigation with multilevel catalogs
+- enhanced download with selection download format
