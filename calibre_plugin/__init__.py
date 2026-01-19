@@ -1,8 +1,8 @@
 """main.py: A calibre plugin containing an OPDS client"""
 
-__author__    = "Steinar Bang"
-__copyright__ = "Steinar Bang, 2015-2022"
-__credits__   = ["Steinar Bang"]
+__author__    = "Steinar Bang, Edgar Pireyn"
+__copyright__ = "Steinar Bang, 2015-2022 - Edgar Pireyn, 2026"
+__credits__   = ["Steinar Bang", "Edgar Pireyn"]
 __license__   = "GPL v3"
 
 from calibre.customize import InterfaceActionBase
@@ -16,9 +16,9 @@ class OpdsClient(InterfaceActionBase):
     name = 'OPDS Client'
     description = 'Import from the OPDS catalog exported by a different calibre'
     supported_platforms = ['windows', 'osx', 'linux']
-    author = "Steinar Bang"
-    version = (2, 0, 0)
-    minimum_calibre_version = (5, 0, 1)
+    author = "Steinar Bang & Edgar Pireyn"
+    version = (2, 1, 0)
+    minimum_calibre_version = (6, 0, 0)
 
     actual_plugin = 'calibre_plugins.opds_client.ui:OpdsInterfacePlugin'
 

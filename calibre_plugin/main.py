@@ -1,19 +1,36 @@
 """main.py: A GUI to download an OPDS feed, filter out parts of the results, and download selected books from the feed into the local library"""
 
-__author__    = "Steinar Bang"
-__copyright__ = "Steinar Bang, 2015-2021"
-__credits__   = ["Steinar Bang"]
+__author__    = "Steinar Bang & Edgar Pireyn"
+__copyright__ = "Steinar Bang, 2015-2021 - Edgar Pireyn, 2025"
+__credits__   = ["Steinar Bang", "Edgar Pireyn"]
 __license__   = "GPL v3"
 
-import sys
 import datetime
-from PyQt6.QtCore import Qt, QSortFilterProxyModel, QStringListModel, QEvent
-from PyQt6.QtWidgets import QDialog, QGridLayout, QLineEdit, QComboBox, QPushButton, QCheckBox, QMessageBox, QLabel, QAbstractItemView, QTableView, QHeaderView, QVBoxLayout, QListWidget, QListWidgetItem, QHBoxLayout
 
-from calibre_plugins.opds_client.model import OpdsBooksModel
-from calibre_plugins.opds_client.config import prefs
-from calibre_plugins.opds_client import config
+from calibre import browser
+
 from calibre.ebooks.metadata.book.base import Metadata
+from calibre_plugins.opds_client import config
+from calibre_plugins.opds_client.config import prefs
+from calibre_plugins.opds_client.model import OpdsBooksModel
+from PyQt6.QtCore import QEvent, QSortFilterProxyModel, QStringListModel, Qt
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QGridLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QTableView,
+    QVBoxLayout,
+)
 
 
 class DynamicBook(dict):
@@ -38,19 +55,19 @@ class OpdsDialog(QDialog):
         self.layout = QGridLayout()
         self.setLayout(self.layout)
 
-        self.setWindowTitle('OPDS Client')
+        self.setWindowTitle("OPDS Client")
         self.setWindowIcon(icon)
 
         labelColumnWidths = []
 
-        self.opdsUrlLabel = QLabel('OPDS URL: ')
+        self.opdsUrlLabel = QLabel("OPDS URL: ")
         self.layout.addWidget(self.opdsUrlLabel, 0, 0)
         labelColumnWidths.append(self.layout.itemAtPosition(0, 0).sizeHint().width())
 
         config.convertSingleStringOpdsUrlPreferenceToListOfStringsPreference()
         self.opdsUrlEditor = QComboBox(self)
         self.opdsUrlEditor.activated.connect(self.opdsUrlEditorActivated)
-        self.opdsUrlEditor.addItems(prefs['opds_url'])
+        self.opdsUrlEditor.addItems(prefs["opds_url"])
         self.opdsUrlEditor.setEditable(True)
         self.opdsUrlEditor.setInsertPolicy(QComboBox.InsertAtTop)
         self.layout.addWidget(self.opdsUrlEditor, 0, 1, 1, 3)
@@ -58,7 +75,7 @@ class OpdsDialog(QDialog):
 
         buttonColumnNumber = 7
         buttonColumnWidths = []
-        self.about_button = QPushButton('About', self)
+        self.about_button = QPushButton("About", self)
         self.about_button.setAutoDefault(False)
         self.about_button.clicked.connect(self.about)
         self.layout.addWidget(self.about_button, 0, buttonColumnNumber)
@@ -71,7 +88,7 @@ class OpdsDialog(QDialog):
         firstCatalogTitle = catalogsTuple[0]
         self.currentOpdsCatalogs = catalogsTuple[1] # A dictionary of title->feedURL
 
-        self.opdsCatalogSelectorLabel = QLabel('OPDS Catalog:')
+        self.opdsCatalogSelectorLabel = QLabel("OPDS Catalog:")
         self.layout.addWidget(self.opdsCatalogSelectorLabel, 1, 0)
         labelColumnWidths.append(self.layout.itemAtPosition(1, 0).sizeHint().width())
 
@@ -82,7 +99,7 @@ class OpdsDialog(QDialog):
         self.opdsCatalogSelector.setCurrentText(firstCatalogTitle)
         self.layout.addWidget(self.opdsCatalogSelector, 1, 1, 1, 3)
 
-        self.download_opds_button = QPushButton('Download OPDS', self)
+        self.download_opds_button = QPushButton("Download OPDS", self)
         self.download_opds_button.setAutoDefault(False)
         self.download_opds_button.clicked.connect(self.download_opds)
         self.layout.addWidget(self.download_opds_button, 1, buttonColumnNumber)
@@ -93,7 +110,7 @@ class OpdsDialog(QDialog):
         self.searchEditor.returnPressed.connect(self.searchBookList)
         self.layout.addWidget(self.searchEditor, 2, buttonColumnNumber - 2, 1, 2)
 
-        self.searchButton = QPushButton('Search', self)
+        self.searchButton = QPushButton("Search", self)
         self.searchButton.setAutoDefault(False)
         self.searchButton.clicked.connect(self.searchBookList)
         self.layout.addWidget(self.searchButton, 2, buttonColumnNumber)
@@ -111,27 +128,27 @@ class OpdsDialog(QDialog):
         self.library_view.resizeColumnsToContents()
         self.layout.addWidget(self.library_view, 3, 0, 3, buttonColumnNumber + 1)
 
-        self.hideNewsCheckbox = QCheckBox('Hide Newspapers', self)
+        self.hideNewsCheckbox = QCheckBox("Hide Newspapers", self)
         self.hideNewsCheckbox.clicked.connect(self.setHideNewspapers)
-        self.hideNewsCheckbox.setChecked(prefs['hideNewspapers'])
+        self.hideNewsCheckbox.setChecked(prefs["hideNewspapers"])
         self.layout.addWidget(self.hideNewsCheckbox, 6, 0, 1, 3)
 
-        self.hideBooksAlreadyInLibraryCheckbox = QCheckBox('Hide books already in library', self)
+        self.hideBooksAlreadyInLibraryCheckbox = QCheckBox("Hide books already in library", self)
         self.hideBooksAlreadyInLibraryCheckbox.clicked.connect(self.setHideBooksAlreadyInLibrary)
-        self.hideBooksAlreadyInLibraryCheckbox.setChecked(prefs['hideBooksAlreadyInLibrary'])
+        self.hideBooksAlreadyInLibraryCheckbox.setChecked(prefs["hideBooksAlreadyInLibrary"])
         self.layout.addWidget(self.hideBooksAlreadyInLibraryCheckbox, 7, 0, 1, 3)
 
         # Let the checkbox initial state control the filtering
         self.model.setFilterBooksThatAreNewspapers(self.hideNewsCheckbox.isChecked())
         self.model.setFilterBooksThatAreAlreadyInLibrary(self.hideBooksAlreadyInLibraryCheckbox.isChecked())
 
-        self.downloadButton = QPushButton('Download selected books', self)
+        self.downloadButton = QPushButton("Download selected books", self)
         self.downloadButton.setAutoDefault(False)
         self.downloadButton.clicked.connect(self.downloadSelectedBooks)
         self.layout.addWidget(self.downloadButton, 6, buttonColumnNumber)
         buttonColumnWidths.append(self.layout.itemAtPosition(6, buttonColumnNumber).sizeHint().width()) 
 
-        self.fixTimestampButton = QPushButton('Fix timestamps of selection', self)
+        self.fixTimestampButton = QPushButton("Fix timestamps of selection", self)
         self.fixTimestampButton.setAutoDefault(False)
         self.fixTimestampButton.clicked.connect(self.fixBookTimestamps)
         self.layout.addWidget(self.fixTimestampButton, 7, buttonColumnNumber)
@@ -139,7 +156,7 @@ class OpdsDialog(QDialog):
 
         # Make all columns of the grid layout the same width as the button column
         buttonColumnWidth = max(buttonColumnWidths)
-        for columnNumber in range(0, buttonColumnNumber):
+        for columnNumber in range(buttonColumnNumber):
             self.layout.setColumnMinimumWidth(columnNumber, buttonColumnWidth)
 
         # Make sure the first column isn't wider than the labels it holds
@@ -152,7 +169,7 @@ class OpdsDialog(QDialog):
         # --------------------------------------------------------------
         # 1. Loading ROOT catalog as list od subcatalogs
         catalogs = self.model.downloadOpdsRootCatalog(
-            self.gui, self.opdsUrlEditor.currentText(), False
+            self.gui, self.opdsUrlEditor.currentText(), False,
         )
         self.currentOpdsCatalogs = catalogs[1]            # dict title→url
         self.model.loadSubcatalogs(self.currentOpdsCatalogs)
@@ -168,31 +185,31 @@ class OpdsDialog(QDialog):
         self.library_view.installEventFilter(self)
         
     def opdsUrlEditorActivated(self, text):
-        prefs['opds_url'] = config.saveOpdsUrlCombobox(self.opdsUrlEditor)
+        prefs["opds_url"] = config.saveOpdsUrlCombobox(self.opdsUrlEditor)
         catalogs = self.model.downloadOpdsRootCatalog(
-            self.gui, self.opdsUrlEditor.currentText(), True
+            self.gui, self.opdsUrlEditor.currentText(), True,
         )
         self.currentOpdsCatalogs = catalogs[1]
         self.model.loadSubcatalogs(self.currentOpdsCatalogs)
 
     def setHideNewspapers(self, checked):
-        prefs['hideNewspapers'] = checked
+        prefs["hideNewspapers"] = checked
         self.model.setFilterBooksThatAreNewspapers(checked)
         self.resizeAllLibraryViewLinesToHeaderHeight()
 
     def setHideBooksAlreadyInLibrary(self, checked):
-        prefs['hideBooksAlreadyInLibrary'] = checked
+        prefs["hideBooksAlreadyInLibrary"] = checked
         self.model.setFilterBooksThatAreAlreadyInLibrary(checked)
         self.resizeAllLibraryViewLinesToHeaderHeight()
 
     def searchBookList(self):
         searchString = self.searchEditor.text()
-        print("starting book list search for: %s" % searchString)
+        print(f"starting book list search for: {searchString}")
         self.searchproxymodel.setFilterFixedString(searchString)
 
     def about(self):
-        text = get_resources('about.txt')
-        QMessageBox.about(self, 'About the OPDS Client plugin', text.decode('utf-8'))
+        text = get_resources("about.txt")
+        QMessageBox.about(self, "About the OPDS Client plugin", text.decode("utf-8"))
 
     def download_opds(self):
         opdsCatalogUrl = self.currentOpdsCatalogs.get(self.opdsCatalogSelector.currentText(), None)
@@ -241,7 +258,7 @@ class OpdsDialog(QDialog):
             bookIdToValMap[identicalBookId] = bookTimestamp
         if len(bookIdToValMap) < 1:
             print("Failed to set timestamp of book: %s" % book)
-        self.db.set_field('timestamp', bookIdToValMap)
+        self.db.set_field("timestamp", bookIdToValMap)
 
     def findIdenticalBooksForBooksWithMultipleAuthors(self, book):
         authorsList = book.authors
@@ -256,21 +273,21 @@ class OpdsDialog(QDialog):
         return identicalBookIds
 
     def dummy_books(self):
-        dummy_author = ' ' * 40
-        dummy_title = ' ' * 60
+        dummy_author = " " * 40
+        dummy_title = " " * 60
         books_list = []
         for line in range (1, 10):
             book = DynamicBook()
             book.author = dummy_author
             book.title = dummy_title
-            book.updated = datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S+00:00')
-            book.id = ''
+            book.updated = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S+00:00")
+            book.id = ""
             books_list.append(book)
         return books_list
 
     def resizeAllLibraryViewLinesToHeaderHeight(self):
         rowHeight = self.library_view.horizontalHeader().height()
-        for rowNumber in range (0, self.library_view.model().rowCount()):
+        for rowNumber in range (self.library_view.model().rowCount()):
             self.library_view.setRowHeight(rowNumber, rowHeight)
 
 
@@ -297,10 +314,10 @@ class OpdsDialog(QDialog):
         meta = index.data(Qt.UserRole)
 
         # --- SUBCATALOG? ----------------------------------------------
-        if hasattr(meta, 'catalogUrl'):                # ← fixed
+        if hasattr(meta, "catalogUrl"):                # ← fixed
             # save current state for Backspace
             self.catalogHistory.append(
-                (list(self.model.books), self.model.serverHeader)
+                (list(self.model.books), self.model.serverHeader),
             )
             self._openCatalog(meta.catalogUrl)         # ← fixed
         else:
@@ -311,7 +328,7 @@ class OpdsDialog(QDialog):
         self.model.downloadOpdsCatalog(self.gui, url)
         if self.model.isCalibreOpdsServer():
             self.model.downloadMetadataUsingCalibreRestApi(
-                self.opdsUrlEditor.currentText()
+                self.opdsUrlEditor.currentText(),
             )
         self.resizeAllLibraryViewLinesToHeaderHeight()
 
@@ -335,16 +352,17 @@ class SelectFormatDialog(QDialog):
         self.gui = gui
         self.links = links
         self.selected_url = None
+        self.header = parent.model.auth_header()
 
-        self.setWindowTitle('Select format')
+        self.setWindowTitle("Select format")
         self.layout = QVBoxLayout(self)
 
         # Format list
         self.list_widget = QListWidget(self)
         for url in self.links:
             # Extract extention as format name
-            format_name = url.split('/')[-1].split('?')[0].split('.')[-1].upper()
-            item = QListWidgetItem(f'{format_name} ({url.split("/")[-1]})')
+            format_name = url.split("/")[-1].split("?")[0].split(".")[-1].upper()
+            item = QListWidgetItem(f'{format_name} ({url.split("/")[-2]})')
             item.setData(Qt.ItemDataRole.UserRole, url) # Save URL in element data
             self.list_widget.addItem(item)
         
@@ -353,8 +371,8 @@ class SelectFormatDialog(QDialog):
 
         # Buttons
         self.button_layout = QHBoxLayout()
-        self.download_button = QPushButton('Download selected format', self)
-        self.cancel_button = QPushButton('Cancel', self)
+        self.download_button = QPushButton("Download selected format", self)
+        self.cancel_button = QPushButton("Cancel", self)
         
         self.button_layout.addWidget(self.download_button)
         self.button_layout.addWidget(self.cancel_button)
@@ -374,6 +392,13 @@ class SelectFormatDialog(QDialog):
         # Get URL from element data
         self.selected_url = current_item.data(Qt.ItemDataRole.UserRole)
         if self.selected_url:
-            self.gui.download_ebook(self.selected_url)
+            self.gui.download_ebook(self.selected_url, create_browser = self.create_browser)
         
         super().accept() # Close with "ОК"
+
+    def create_browser(self):
+        if self.header is not None:
+            br = browser()
+            br.set_current_header(self.header[0], self.header[1])
+            return br
+        return None

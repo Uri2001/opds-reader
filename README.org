@@ -6,3 +6,4 @@ This is a refactored version of this [[https://github.com/steinarb/opds-reader.g
 ** What was changed?
 - enhanced navigation with multilevel catalogs
 - enhanced download with selection download format
+- handles basic HTTP authentication
